@@ -15,4 +15,6 @@ services:
       sh -c ". bin/startup.sh"
     stdin_open: true
     tty: true
-    restart: unless-stopped
+    # restart: unless-stopped
+    extra_hosts:
+      - "localhost:127.0.0.1"

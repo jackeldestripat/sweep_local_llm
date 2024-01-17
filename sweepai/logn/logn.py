@@ -2,12 +2,11 @@ import datetime
 import inspect
 import logging
 import os
-import datetime
 import threading
 import traceback
 
-LOG_PATH = "logn_logs/logs"
-META_PATH = "logn_logs/meta"
+LOG_PATH = "../logn_logs/logs"
+META_PATH = "../logn_logs/meta"
 END_OF_LINE = "󰀀{level}󰀀\n"
 
 
@@ -267,7 +266,6 @@ class _Task:
 
     @staticmethod
     def create_child_task(name: str, function_name: str = None):
-
         parent_task = _Task.get_task(create_if_not_exist=False)
         if parent_task is None:
             task_key = get_task_key()
@@ -275,10 +273,10 @@ class _Task:
                 logn_task_key=None,
                 logn_parent_task=parent_task,
                 metadata={
-                "name": name,
-                "created_at": datetime.datetime.now().isoformat(),
-                "status": "created"
-            },
+                    "name": name,
+                    "created_at": datetime.datetime.now().isoformat(),
+                    "status": "created",
+                },
                 function_name=function_name,
             )
         else:
@@ -290,7 +288,7 @@ class _Task:
                     **parent_task.metadata,
                     "name": parent_task.metadata.get("name", "NO_NAME") + "_" + name,
                     "created_at": datetime.datetime.now().isoformat(),
-                    "status": "created"
+                    "status": "created",
                 },
                 function_name=function_name,
             )
