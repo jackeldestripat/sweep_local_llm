@@ -5,9 +5,19 @@ import ctypes
 import json
 import threading
 import time
+from typing import Optional
 
 import requests
-from fastapi import Depends, FastAPI, HTTPException, Path, Request, Security, status
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Path,
+    Security,
+    status,
+)
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from github.Commit import Commit
@@ -23,6 +33,7 @@ from sweepai.config.client import (
     SWEEP_BAD_FEEDBACK,
     SWEEP_GOOD_FEEDBACK,
     SweepConfig,
+    get_gha_enabled,
     get_rules,
 )
 from sweepai.config.server import (
@@ -169,9 +180,9 @@ def terminate_thread(thread):
         logger.exception(f"Failed to terminate thread: {e}")
 
 
-def delayed_kill(thread: threading.Thread, delay: int = 60 * 60):
-    time.sleep(delay)
-    terminate_thread(thread)
+# def delayed_kill(thread: threading.Thread, delay: int = 60 * 60):
+#     time.sleep(delay)
+#     terminate_thread(thread)
 
 
 def call_on_ticket(*args, **kwargs):
@@ -189,8 +200,8 @@ def call_on_ticket(*args, **kwargs):
     on_ticket_events[key] = thread
     thread.start()
 
-    delayed_kill_thread = threading.Thread(target=delayed_kill, args=(thread,))
-    delayed_kill_thread.start()
+    # delayed_kill_thread = threading.Thread(target=delayed_kill, args=(thread,))
+    # delayed_kill_thread.start()
 
 
 def call_on_check_suite(*args, **kwargs):
@@ -277,49 +288,80 @@ def handle_request(request_dict, event=None):
                                     if check_suite.conclusion == "failure":
                                         pr.edit(state="closed")
                                         break
-                            if not (time.time() - pr.created_at.timestamp()) > 60 * 15:
-                                if request.check_run.conclusion == "failure":
-                                    # check if the base branch is passing
-                                    commits = repo.get_commits(sha=pr.base.ref)
-                                    latest_commit: Commit = commits[0]
-                                    if all(
-                                        status != "failure"
-                                        for status in [
-                                            status.state
-                                            for status in latest_commit.get_statuses()
-                                        ]
-                                    ):  # base branch is passing
-                                        logs = download_logs(
-                                            request.repository.full_name,
-                                            request.check_run.run_id,
-                                            request.installation.id,
-                                        )
-                                        logs, user_message = clean_logs(logs)
-                                        commit_author = request.sender.login
-                                        tracking_id = get_hash()
-                                        stack_pr(
-                                            request=f"[Sweep GHA Fix] The GitHub Actions run failed with the following error logs:\n\n```\n\n{logs}\n\n```",
-                                            pr_number=pr.number,
-                                            username=commit_author,
-                                            repo_full_name=repo.full_name,
-                                            installation_id=request.installation.id,
-                                            tracking_id=tracking_id,
-                                        )
+                            if (
+                                not (time.time() - pr.created_at.timestamp()) > 60 * 15
+                                and request.check_run.conclusion == "failure"
+                                and pr.state == "open"
+                                and get_gha_enabled(repo)
+                                and len(
+                                    [
+                                        comment
+                                        for comment in pr.get_issue_comments()
+                                        if "Fixing PR" in comment.body
+                                    ]
+                                )
+                                < 2
+                            ):
+                                # check if the base branch is passing
+                                commits = repo.get_commits(sha=pr.base.ref)
+                                latest_commit: Commit = commits[0]
+                                if all(
+                                    status != "failure"
+                                    for status in [
+                                        status.state
+                                        for status in latest_commit.get_statuses()
+                                    ]
+                                ):  # base branch is passing
+                                    logs = download_logs(
+                                        request.repository.full_name,
+                                        request.check_run.run_id,
+                                        request.installation.id,
+                                    )
+                                    logs, user_message = clean_logs(logs)
+                                    attributor = request.sender.login
+                                    if attributor.endswith("[bot]"):
+                                        attributor = commit.author.login
+                                    if attributor.endswith("[bot]"):
+                                        attributor = pr.assignee.login
+                                    if attributor.endswith("[bot]"):
+                                        return {
+                                            "success": False,
+                                            "error_message": "The PR was created by a bot, so I won't attempt to fix it.",
+                                        }
+                                    tracking_id = get_hash()
+                                    stack_pr(
+                                        request=f"[Sweep GHA Fix] The GitHub Actions run failed with the following error logs:\n\n```\n\n{logs}\n\n```",
+                                        pr_number=pr.number,
+                                        username=attributor,
+                                        repo_full_name=repo.full_name,
+                                        installation_id=request.installation.id,
+                                        tracking_id=tracking_id,
+                                        commit_hash=pr.head.sha,
+                                    )
                         elif (
                             request.check_run.check_suite.head_branch
                             == repo.default_branch
+                            and get_gha_enabled(repo)
                         ):
                             if request.check_run.conclusion == "failure":
+                                attributor = request.sender.login
+                                if attributor.endswith("[bot]"):
+                                    commit = repo.get_commit(request.check_run.head_sha)
+                                    attributor = commit.author.login
+                                if attributor.endswith("[bot]"):
+                                    return {
+                                        "success": False,
+                                        "error_message": "The PR was created by a bot, so I won't attempt to fix it.",
+                                    }
                                 logs = download_logs(
                                     request.repository.full_name,
                                     request.check_run.run_id,
                                     request.installation.id,
                                 )
                                 logs, user_message = clean_logs(logs)
-                                commit_author = request.sender.login
                                 chat_logger = ChatLogger(
                                     data={
-                                        "username": commit_author,
+                                        "username": attributor,
                                         "title": "[Sweep GHA Fix] Fix the failing GitHub Actions",
                                     }
                                 )
@@ -333,7 +375,7 @@ def handle_request(request_dict, event=None):
                                     installation_id=request_dict["installation"]["id"],
                                     user_token=None,
                                     use_faster_model=chat_logger.use_faster_model(),
-                                    username=commit_author,
+                                    username=attributor,
                                     chat_logger=chat_logger,
                                 )
 
@@ -352,9 +394,9 @@ def handle_request(request_dict, event=None):
                                 "reason": "PR already has a comment from sweep bot",
                             }
                         rule_buttons = []
-                        repo_rules = get_rules(repo)
-                        if repo_rules != [""]:
-                            for rule in repo_rules:
+                        repo_rules = get_rules(repo) or []
+                        if repo_rules != [""] and repo_rules != []:
+                            for rule in repo_rules or []:
                                 if rule:
                                     rule_buttons.append(
                                         Button(label=f"{RULES_LABEL} {rule}")
@@ -373,9 +415,17 @@ def handle_request(request_dict, event=None):
                             )
 
                         if pr.mergeable == False:
+                            attributor = pr.user.login
+                            if attributor.endswith("[bot]"):
+                                attributor = pr.assignee.login
+                            if attributor.endswith("[bot]"):
+                                return {
+                                    "success": False,
+                                    "error_message": "The PR was created by a bot, so I won't attempt to fix it.",
+                                }
                             on_merge_conflict(
                                 pr_number=pr.number,
-                                username=pr.user.login,
+                                username=attributor,
                                 repo_full_name=request_dict["repository"]["full_name"],
                                 installation_id=request_dict["installation"]["id"],
                                 tracking_id=get_hash(),
@@ -927,6 +977,14 @@ def handle_request(request_dict, event=None):
                                         f"PR associated with branch {branch_name}: #{pr.number} - {pr.title}"
                                     )
                                     if pr.mergeable == False:
+                                        attributor = pr.user.login
+                                        if attributor.endswith("[bot]"):
+                                            attributor = pr.assignee.login
+                                        if attributor.endswith("[bot]"):
+                                            return {
+                                                "success": False,
+                                                "error_message": "The PR was created by a bot, so I won't attempt to fix it.",
+                                            }
                                         on_merge_conflict(
                                             pr_number=pr.number,
                                             username=pr.user.login,
@@ -949,16 +1007,15 @@ def handle_request(request_dict, event=None):
 
 
 @app.post("/")
-async def webhook(raw_request: Request):
+def webhook(
+    request_dict: dict = Body(...),
+    x_github_event: Optional[str] = Header(None, alias="X-GitHub-Event"),
+):
     """Handle a webhook request from GitHub."""
     with logger.contextualize(tracking_id="main", env=ENV):
-        request_dict = await raw_request.json()
-        event = raw_request.headers.get("X-GitHub-Event")
-        assert event is not None
-
         action = request_dict.get("action", None)
-        logger.info(f"Received event: {event}, {action}")
-        return handle_request(request_dict, event=event)
+        logger.info(f"Received event: {x_github_event}, {action}")
+        return handle_request(request_dict, event=x_github_event)
 
 
 # Set up cronjob for this

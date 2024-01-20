@@ -15,6 +15,7 @@ import yaml
 import yamllint.config as yamllint_config
 from github import BadCredentialsException
 from github.Issue import Issue
+from github.PullRequest import PullRequest as GithubPullRequest
 from logtail import LogtailContext, LogtailHandler
 from loguru import logger
 from tabulate import tabulate
@@ -149,6 +150,13 @@ Cheers,
 <br/>
 Sweep
 <br/>"""
+
+FASTER_MODEL_MESSAGE = f"""\
+You ran out of the free tier GPT-4 tickets! We no longer support running Sweep with GPT-3.5 as it is too unreliable. Here are your options:
+- You can get a free trial of Sweep Pro to get unlimited GPT-4 tickets [here](https://buy.stripe.com/00g5npeT71H2gzCfZ8) or purchase a individual GPT-4 tickets [here](https://buy.stripe.com/00g3fh7qF85q0AE14d).
+- You can self-host Sweep with your own GPT-4 API key. You can find instructions [here](https://docs.sweep.dev/deployment).
+- You can book a chat with us to discuss your use case and get additional free GPT-4 tickets [here](https://calendly.com/d/2n5-3qf-9xy/user-interview).
+"""
 
 
 def on_ticket(
@@ -556,7 +564,13 @@ def on_ticket(
             initial_sandbox_response = -1
             initial_sandbox_response_file = None
 
-            def edit_sweep_comment(message: str, index: int, pr_message="", done=False):
+            def edit_sweep_comment(
+                message: str,
+                index: int,
+                pr_message="",
+                done=False,
+                add_bonus_message=True,
+            ):
                 nonlocal current_index, user_token, g, repo, issue_comment, initial_sandbox_response, initial_sandbox_response_file
                 # -1 = error, -2 = retry
                 # Only update the progress bar if the issue generation errors.
@@ -590,8 +604,12 @@ def on_ticket(
                         "## ❌ Unable to Complete PR"
                         + "\n"
                         + message
-                        + "\n\nFor bonus GPT-4 tickets, please report this bug on"
-                        f" **[Discord](https://discord.gg/invite/sweep)** (tracking ID: `{tracking_id}`)."
+                        + (
+                            "\n\nFor bonus GPT-4 tickets, please report this bug on"
+                            f" **[Discord](https://discord.gg/invite/sweep)** (tracking ID: `{tracking_id}`)."
+                            if add_bonus_message
+                            else ""
+                        )
                     )
                     if table is not None:
                         agg_message = (
@@ -627,6 +645,21 @@ def on_ticket(
                             if comment.user.login == CURRENT_USERNAME
                         ][0]
                         issue_comment.edit(msg)
+
+            if use_faster_model:
+                edit_sweep_comment(FASTER_MODEL_MESSAGE, -1, add_bonus_message=False)
+                posthog.capture(
+                    username,
+                    "ran_out_of_tickets",
+                    properties={
+                        **metadata,
+                        "duration": round(time() - on_ticket_start_time),
+                    },
+                )
+                return {
+                    "success": False,
+                    "error_message": "We deprecated supporting GPT 3.5.",
+                }
 
             if sandbox_mode:
                 handle_sandbox_mode(
@@ -1331,9 +1364,9 @@ def on_ticket(
                 )
 
                 rule_buttons = []
-                repo_rules = get_rules(repo)
-                if repo_rules != [""]:
-                    for rule in repo_rules:
+                repo_rules = get_rules(repo) or []
+                if repo_rules != [""] and repo_rules != []:
+                    for rule in repo_rules or []:
                         if rule:
                             rule_buttons.append(Button(label=f"{RULES_LABEL} {rule}"))
                     if len(repo_rules) == 0:
@@ -1368,12 +1401,14 @@ def on_ticket(
                     except:
                         pass
 
-                pr: PullRequest = repo.create_pull(
+                pr: GithubPullRequest = repo.create_pull(
                     title=pr_changes.title,
                     body=pr_actions_message + pr_changes.body,
                     head=pr_changes.pr_head,
                     base=SweepConfig.get_branch(repo),
                 )
+
+                pr.add_to_assignees(username)
 
                 ticket_progress.status = TicketProgressStatus.COMPLETE
                 ticket_progress.context.done_time = time()
@@ -1611,8 +1646,6 @@ def on_ticket(
                     raise SystemExit
                 except Exception as e:
                     logger.error(e)
-            finally:
-                cloned_repo.delete()
 
             if delete_branch:
                 try:
