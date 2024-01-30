@@ -1,0 +1,76 @@
+import { Callout } from 'nextra/components'
+import { FaInfoCircle, FaExclamationCircle } from 'react-icons/fa'
+
+# Sweep Assistant
+
+This is a locally running dev tool for getting Sweep to code alongside you. All of your code will be executed locally (no external calls besides OpenAI).
+
+## Installation
+*5 minutes*
+
+<Callout type="warning" emoji={<FaExclamationCircle style={{marginTop: 6, fontSize: 18}} />}>
+**Pre-requisites**
+<ol style={{marginTop: 5}}>
+1. [OpenAI api key](https://platform.openai.com).
+2. [Node.js](https://nodejs.org/en/download/) (> v18) should be installed. If you are using a different version, you can use `npm install -g n && n 18`
+ to upgrade your Node.js version.
+</ol>
+</Callout>
+
+Install the assistant by running the following command in your terminal:
+
+```sh filename="terminal"
+curl -O https://raw.githubusercontent.com/sweepai/sweep/main/bin/install_assistant.sh && $(basename $SHELL) install_assistant.sh
+```
+
+Run the assistant by running `sweep` in your terminal.
+
+## Usage (After Installation)
+
+1. Set `Repository Path`
+    - You can run `pwd` to use your current working directory.
+    - (Optional) Edit the branch name to create a new branch for Sweep.
+2. Select a file for Sweep to edit.
+3. Add meticulous instructions for the code to edit.
+4. (Optional) Insert a validation script, such as `python $FILE_PATH`. $FILE_PATH refers to the current path. Click the "Run Tests" button to test the script.
+    - Hint: use the $FILE_PATH parameter to only check the current file to reduce noise.
+    - This step is optional but highly recommended (see below).
+5. Click `Generate Code`.
+6. Click "Reload" to reject changes, or the check mark to approve the change.
+
+## Validation Script
+
+We highly recommended that you add a validation script to your assistant.
+
+<Callout type="info" emoji={<FaInfoCircle style={{marginTop: 6, fontSize: 18}} />}>
+    Human developers identify syntax errors using visual cues like syntax highlighting and red squiggles, which is unavailable to LLMs. The best way for LLMs to detect such errors is to use a formatter to check the syntax and a linter for catching undefined variables.
+</Callout>
+
+Optimally, you should write a script that runs three things:
+1. A formatter - to catch syntax errors
+    - e.g. `black` for Python, `prettier` for JavaScript
+2. A linter - to catch undefined variables or missing imports
+    - e.g. `pylint` for Python, `eslint` for JavaScript
+3. A test suite
+    - e.g. `pytest` for Python, `jest` for JavaScript
+
+So for example, if you are writing Python code, you can use the following:
+
+```sh filename="Validation Script"
+black - < $filename
+pylint $FILE_PATH
+pytest $FILE_PATH
+```
+
+For JavaScript, you can use the following:
+```sh filename="Validation Script"
+prettier $FILE_PATH
+eslint $FILE_PATH
+jest $FILE_PATH
+```
+
+Make sure to click the "Run Tests" button to test the script.
+
+<Callout type="info" emoji={<FaInfoCircle style={{marginTop: 6, fontSize: 18}} />}>
+  You may want to provide the full path to the CLI tools (e.g. `/home/kevin/.cache/pypoetry/virtualenvs/sweepai-u_abcdefg-py3.10/bin/black`) if you are using a custom virtual environment.
+</Callout>

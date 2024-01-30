@@ -202,6 +202,7 @@ def check_valid_typescript(code: str) -> tuple[bool, str]:
         result = subprocess.run(
             ["npx", "prettier", "--parser", "babel-ts", tmp_file],
             capture_output=True,
+            timeout=5,
         )
 
         os.remove(tmp_file)
@@ -341,6 +342,7 @@ class Tiktoken:
         "gpt-4-32k",
         "gpt-4-32k-0613",
         "gpt-4-1106-preview",
+        "gpt-4-0125-preview",
     ]
     models = openai_models
 
